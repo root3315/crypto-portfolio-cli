@@ -1,18 +1,61 @@
 #!/usr/bin/env python3
 """crypto-portfolio-cli — track and manage your crypto portfolio from the terminal."""
 
-import argparse, json, sys
+import argparse, json, sys, time
 from datetime import datetime
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 PORTFOLIO_FILE = Path.home() / ".crypto_portfolio.json"
 console = Console()
+
+MAX_RETRIES = 3
+BACKOFF_FACTOR = 1.5
+RETRY_STATUS_CODES = [429, 500, 502, 503, 504]
+
+
+def _make_session():
+    session = requests.Session()
+    retry = Retry(
+        total=MAX_RETRIES,
+        backoff_factor=BACKOFF_FACTOR,
+        status_forcelist=RETRY_STATUS_CODES,
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+def _request_with_retry(url, params=None, timeout=15):
+    session = _make_session()
+    last_exc = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = session.get(url, params=params, timeout=timeout)
+            if resp.status_code in RETRY_STATUS_CODES:
+                wait = BACKOFF_FACTOR ** (attempt - 1)
+                console.print(f"[yellow]Request returned {resp.status_code}, retrying in {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})[/yellow]")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            last_exc = exc
+            wait = BACKOFF_FACTOR ** (attempt - 1)
+            console.print(f"[yellow]Request failed: {exc}, retrying in {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})[/yellow]")
+            time.sleep(wait)
+    if last_exc is not None:
+        raise last_exc
+    raise requests.RequestException("All retry attempts exhausted")
 
 
 def load_portfolio():
@@ -30,12 +73,11 @@ def save_portfolio(data):
 def fetch_prices(coin_ids):
     if not coin_ids:
         return {}
-    resp = requests.get(
+    resp = _request_with_retry(
         f"{COINGECKO_API}/simple/price",
         params={"ids": ",".join(set(coin_ids)), "vs_currencies": "usd", "include_24hr_change": "true"},
         timeout=15,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
@@ -104,9 +146,11 @@ def cmd_show(args):
 
 
 def cmd_list_coins(args):
-    resp = requests.get(f"{COINGECKO_API}/coins/markets",
-        params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20, "page": 1}, timeout=15)
-    resp.raise_for_status()
+    resp = _request_with_retry(
+        f"{COINGECKO_API}/coins/markets",
+        params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20, "page": 1},
+        timeout=15,
+    )
     table = Table(title="Top 20 Coins by Market Cap")
     table.add_column("#", justify="right")
     table.add_column("Symbol", style="cyan")
