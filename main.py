@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """crypto-portfolio-cli — track and manage your crypto portfolio from the terminal."""
 
-import argparse, json, sys, time
+import argparse, csv, json, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -145,6 +145,45 @@ def cmd_show(args):
     console.print(Panel(f"Total Value: [bold]${total_value:,.2f}[/bold]  |  Total Cost: ${total_cost:,.2f}  |  P&L: [{pnl_c}]${total_pnl:+,.2f} ({total_pnl_pct:+.2f}%)[/{pnl_c}]", title="Portfolio Summary"))
 
 
+def cmd_export_csv(args):
+    portfolio = load_portfolio()
+    if not portfolio:
+        console.print("[dim]Portfolio is empty. Use 'add' to get started.[/dim]")
+        return
+    prices = fetch_prices(list(portfolio.keys()))
+    output_file = args.output if args.output else "portfolio_export.csv"
+    with open(output_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Asset", "Holdings", "Avg Buy Price (USD)", "Current Price (USD)",
+                          "24h Change (%)", "Value (USD)", "Cost (USD)", "P&L (USD)", "P&L (%)"])
+        total_value, total_cost = 0.0, 0.0
+        for coin, entry in portfolio.items():
+            pd = prices.get(coin, {})
+            current_price = pd.get("usd", 0)
+            change_24h = pd.get("usd_24h_change")
+            value = entry["amount"] * current_price
+            cost = entry["amount"] * entry["buy_price"]
+            pnl = value - cost
+            pnl_pct = (value / cost - 1) * 100 if cost else 0
+            total_value += value
+            total_cost += cost
+            writer.writerow([
+                coin.upper(),
+                entry["amount"],
+                round(entry["buy_price"], 2),
+                round(current_price, 2),
+                round(change_24h, 2) if change_24h is not None else "N/A",
+                round(value, 2),
+                round(cost, 2),
+                round(pnl, 2),
+                round(pnl_pct, 2),
+            ])
+        writer.writerow(["TOTAL", "", "", "", "", round(total_value, 2), round(total_cost, 2),
+                          round(total_value - total_cost, 2),
+                          round((total_value / total_cost - 1) * 100, 2) if total_cost else 0])
+    console.print(f"[green]Exported portfolio to {output_file}[/green]")
+
+
 def cmd_list_coins(args):
     resp = _request_with_retry(
         f"{COINGECKO_API}/coins/markets",
@@ -178,8 +217,10 @@ def main():
     p.add_argument("coin", help="Coin ID to remove")
     sub.add_parser("show", help="Display portfolio with live prices and P&L")
     sub.add_parser("list", help="List top 20 coins by market cap")
+    p = sub.add_parser("export", help="Export portfolio to CSV")
+    p.add_argument("-o", "--output", default=None, help="Output file path (default: portfolio_export.csv)")
     args = parser.parse_args()
-    {"add": cmd_add, "remove": cmd_remove, "show": cmd_show, "list": cmd_list_coins}[args.command](args)
+    {"add": cmd_add, "remove": cmd_remove, "show": cmd_show, "list": cmd_list_coins, "export": cmd_export_csv}[args.command](args)
 
 
 if __name__ == "__main__":

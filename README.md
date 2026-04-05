@@ -45,6 +45,15 @@ python main.py list
 
 Shows the top 20 coins by market cap with current prices — useful for checking coin IDs before adding them.
 
+### Export to CSV
+
+```bash
+python main.py export
+python main.py export -o my_portfolio.csv
+```
+
+Exports your portfolio with live prices, P&L, and a totals row to a CSV file. Defaults to `portfolio_export.csv` in the current directory.
+
 ## Coin IDs
 
 CoinGecko uses lowercase string IDs, not ticker symbols. Common ones:
